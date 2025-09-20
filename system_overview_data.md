@@ -58,15 +58,16 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   SA[Super Admin] -->|Invite/Assign| STA[State Admin]
-  STA -->|Invite/Assign (with Full Control)| DA[District Admin]
-  DA -->|Invite/Assign (with Full Control)| SDA[Subdivision Admin]
-  SDA -->|Invite/Assign (with Full Control)| BA[Block Admin]
+  STA -->|Invite/Assign \(with Full Control\)| DA[District Admin]
+  DA -->|Invite/Assign \(with Full Control\)| SDA[Subdivision Admin]
+  SDA -->|Invite/Assign \(with Full Control\)| BA[Block Admin]
 
   classDef fullC fill:#d1fae5,stroke:#10b981,color:#065f46
   STA:::fullC
   DA:::fullC
   SDA:::fullC
   BA:::fullC
+
 ```
 
 - Full Control enabled: admin can create invites and manage sub-units under their scope.
