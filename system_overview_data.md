@@ -173,7 +173,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   Doctor -->|Request Report| System
-  System -->|Assign (optional)| LabNode[Lab]
+  System -->|Assign /(optional/)| LabNode[Lab]
   LabNode -->|Accept/Claim| Worklist
   LabNode -->|Upload Report| Storage
   System -->|Mark Completed| Doctor
@@ -294,17 +294,18 @@ sequenceDiagram
   participant L as Lab
   participant A as Admin
   participant System as Platform
-  participant Chatbot as AI Assistant
+  participant Chatbot as AI_Assistant
 
   M->>System: Registers, gets Health ID & QR
   D->>System: Requests consent from M
   M-->>System: Approves consent (code)
-  D->>System: Creates Consultation Report, uploads files
+  D->>System: Creates Consultation Report and uploads files
   D->>System: Requests Lab Report (assign lab optional)
-  L->>System: Accepts job, uploads result (CSV export available)
+  L->>System: Accepts job and uploads result (CSV export available)
   M->>Chatbot: Asks a question about results
-  Chatbot-->>M: Safe, plain‑language explanation
-  A->>System: Reviews KPIs & heatmap; downloads dashboard PDF
+  Chatbot-->>M: Provides safe, plain-language explanation
+  A->>System: Reviews KPIs & heatmap, downloads dashboard PDF
+
 ```
 
 ## Feature Checklist by Persona
