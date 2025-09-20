@@ -9,6 +9,22 @@ This document orients an LLM to the project structure, key files, responsibiliti
 - Auth: JWT-based (access + refresh). Tokens are used via Authorization header and optionally cookies. OTP login supported.
 - Storage: S3-compatible presigned URLs for file uploads/downloads
 - Security: Rate limiting (Redis), HTTPS enforcement, security headers, password policy, OTP throttles
+- RBAC: Delegated admin full_control can be granted down one level (superadmin -> state_admin; state_admin -> district_admin; district_admin -> subdivision_admin; subdivision_admin -> block_admin). Enforced in backend and reflected in frontend routing/nav gating.
+
+## Troubleshooting
+
+- **403 on POST /check**
+  - Health check endpoint is GET-only to avoid CSRF. Use `GET /check` or `GET /healthz`.
+- **401 on `/users/me` after reload**
+  - Ensure access token is present/valid and `withCredentials` is configured if using cookies.
+- **422 on `/auth/refresh`**
+  - Verify a refresh token is provided (header or cookie as implemented). Re-login to obtain a new token pair.
+- **CORS issues**
+  - Set explicit `ALLOWED_ORIGINS` and `ALLOW_CREDENTIALS=true` when using cookies.
+- **Stale GEO dropdowns**
+  - Use the "Refresh Locations" button in Invitations. Ensure `geoCache` prefetch functions are called on relevant selection changes.
+- **Migrations missing**
+  - Run `alembic upgrade head` and confirm `DATABASE_URL` points to Postgres. Some features (e.g., invitations `full_control`) require latest migrations.
 
 ---
 
@@ -25,9 +41,9 @@ This document orients an LLM to the project structure, key files, responsibiliti
       - `config.py`: Centralized runtime config via environment variables (ENVIRONMENT, SECRET_KEY, DB, Redis, CORS, OTP, storage, etc.)
     - `routers/`
       - `attachments.py`: Presign upload/download and attachment listing with RBAC/consent checks
-      - Other routers (mounted in `main.py`): patients, encounters, consents, consent-requests, invitations, geo, admin_geo, stats, notifications, admin_notes, jurisdiction_change_requests, emergency_access
-    - `deps.py`: Common dependencies (role checks, consent access checks, audit logging). Frequently used symbols include `require_roles()`, `can_view_patient()`, `ensure_access_to_patient()`, `log_action()`
-    - `models.py`: SQLAlchemy models (Users, Patients, Encounters, Attachments, Consents, RefreshToken, OtpCode, etc.)
+      - Other routers (mounted in `main.py`): patients, encounters, consents, consent-requests, invitations, geo, admin_geo, stats, notifications, admin_notes, jurisdiction_change_requests, emergency_access, vaccinations
+      - `deps.py`: Common dependencies (role checks, consent access checks, audit logging). Frequently used symbols include `require_roles()`, `can_view_patient()`, `ensure_access_to_patient()`, `log_action()`
+      - `models.py`: SQLAlchemy models (Users, Patients, Encounters, Attachments, Consents, RefreshToken, OtpCode, etc.)
   - `alembic/`: Database migrations; `env.py` configures Alembic; `versions/` has migration scripts
   - `requirements.txt`: Backend dependencies and versions
   - `scripts/`: Operational scripts (e.g., seeding superadmin)
@@ -61,13 +77,14 @@ Centralized environment-driven configuration. Important keys:
   - `ALLOWED_ORIGINS`, `ALLOW_CREDENTIALS`
 - Redis + Rate limiting
   - `REDIS_URL` and global rate limits: window, anon/auth limits, method-awareness, enable flag
-  - `ENABLE_RATE_LIMIT_MIDDLEWARE` defaults to true in production
+  - `ENABLE_RATE_LIMIT_MIDDLEWARE` defaults to true in all environments (set to `false` to disable)
 - Proxy and HTTPS
   - `TRUST_PROXY` — read `X-Forwarded-Proto` for HTTPS enforcement
 - OTP settings
   - `OTP_EXPIRE_MINUTES`, `OTP_CODE_LENGTH`, `OTP_MAX_ATTEMPTS` (lower in prod)
 - Storage/S3
   - `STORAGE_PROVIDER`, `S3_BUCKET`, AWS creds/region/endpoint
+  - `S3_ADDRESSING_STYLE` (auto|path|virtual) — addressing style for AWS S3 vs MinIO
   - `PRESIGN_EXPIRE_SECONDS`, `MAX_UPLOAD_SIZE_BYTES`, `ALLOWED_UPLOAD_CONTENT_TYPES`
 - Consent and session TTLs
 
@@ -153,6 +170,56 @@ Security controls for uploads:
 - `src/pages/Register.tsx`, `src/pages/Consents.tsx`, patients pages, admin pages, etc.
 - `src/components/` for shared UI pieces (e.g., `PasswordField`)
 
+### App shell, routing, theming, i18n, notifications
+
+- `src/App.tsx`
+  - Central router. Uses `ProtectedRoute` for role-based access. Route gate for `/admin/invitations` allows only `superadmin` or admins with `full_control`; otherwise navigates to `/dashboard`.
+- `src/components/layout/AppLayout.tsx`
+  - Top navigation, language switcher via `react-i18next`, theme selector via `ThemeContext`, and session scoping (`sessionVersion`) to refresh views after auth events.
+  - Hides the Invitations nav link unless user is `superadmin` or has `full_control`.
+- `src/context/ThemeContext.tsx`
+  - Manages light/dark/system modes; persists preference.
+- `src/i18n.ts`
+  - Loads translations from `public/locales/<lng>/translation.json`. Pages use `useTranslation()`.
+- `src/components/ui/Toast.tsx`
+  - Reusable toast/snackbar with variants (success/error/info). Used across admin flows, including Invitations.
+- `src/services/geoCache.ts`
+  - Geo caching utilities: `listStates`, `prefetchDistricts`, `prefetchSubdivisions`, `prefetchBlocks`, `clearAllGeoCache`. Used to keep dropdowns responsive and up-to-date.
+
+### Frontend Route Map (from `src/App.tsx`)
+
+- `/` — Redirects to `/dashboard` for admins or `/patients` for other authenticated roles; to `/login` when unauthenticated
+- `/login` — Login page
+- `/admin/login` — Admin login page
+- `/admin/register-by-invite` — Complete admin registration via invitation code
+- `/register` — User registration (migrant/provider/hospital)
+- `/forgot-password` — Reset password via Health ID + OTP
+
+- `/patients` — Protected; any authenticated user
+- `/patients/:id` — Protected; any authenticated user with access
+- `/consents` — Protected; roles: migrant, provider, hospital
+- `/emergency-access` — Protected; roles: provider, hospital
+- `/emergency-access/log` — Protected; role: migrant
+- `/chat` — Protected; role: migrant (clinical RAG chatbot)
+- `/profile` — Protected; role: migrant (private profile)
+- `/practice` — Protected; roles: provider, hospital, lab
+- `/lab/jobs` — Protected; role: lab (Lab jobs dashboard)
+- `/profile/jurisdiction` — Protected; roles: provider, hospital (jurisdiction change request)
+
+- `/dashboard` — Protected; role: admin (gated by role/subrole)
+- `/admin/providers` — Protected; role: admin
+- `/admin/hospitals` — Protected; role: admin
+- `/admin/labs` — Protected; role: admin
+- `/admin/diseases` — Protected; role: admin (superadmin or state_admin with `full_control`)
+- `/admin/vaccines` — Protected; role: admin (superadmin or state_admin with `full_control`)
+- `/admin/invitations` — Protected; role: admin (superadmin or any admin with `full_control`)
+- `/admin/notifications` — Protected; role: admin
+- `/admin/jurisdiction-requests` — Protected; role: admin
+- `/admin/manage-admins` — Protected; role: admin (superadmin or any admin with `full_control`)
+
+- `/profile/:healthId` — Public profile view (QR landing)
+- `*` — Not Found fallback
+
 ---
 
 ## Auth Model
@@ -183,8 +250,12 @@ Security controls for uploads:
 - Backend
   - Ensure PostgreSQL is available; set `DATABASE_URL`
   - Set `ENVIRONMENT=development`
-  - Optional: configure `REDIS_URL` for rate limiting (middleware defaults off in dev)
+  - Optional: configure `REDIS_URL` for rate limiting (middleware defaults ON in dev; disable via `ENABLE_RATE_LIMIT_MIDDLEWARE=false` if needed)
   - Run `uvicorn app.main:app --reload`
+  - Chatbot prerequisites (OCR/NER):
+    - Install Tesseract OCR (binary) and ensure it's on PATH (Windows installers available)
+    - If PyMuPDF is unavailable, install Poppler and ensure it is on PATH (used by `pdf2image`)
+    - First run will download MedCAT model from Hugging Face; ensure internet access and a writable HF cache directory
 
 - Frontend
   - Set `.env` with `VITE_API_BASE` (consumed by `API_BASE` in `types`)
@@ -254,6 +325,161 @@ Security controls for uploads:
 
 
 ---
+
+## Recent Architectural Updates (Sept 2025)
+
+Use this section to quickly orient to the latest patterns and where to apply them.
+
+- __Declarative Authorization Dependencies__ (`backend/app/deps.py`)
+  - New dependencies to keep routers clean and business-logic-only:
+    - `require_superadmin()` — gate endpoints to superadmin only (used on `admin_geo` state CRUD).
+    - `require_geo_scope_for_action(required_role, target_field)` — body-based scope check for create actions.
+      - Examples:
+        - District create: `required_role="state_admin"`, `target_field="state_id"`
+        - Subdivision create: `required_role="district_admin"`, `target_field="district_id"`
+        - Block create: `required_role="subdivision_admin"`, `target_field="subdivision_id"`
+    - Path-aware update/delete dependencies:
+      - `require_scope_for_district_update()/delete()` — compares admin’s `state_id` with target state (considering body change).
+      - `require_scope_for_subdivision_update()/delete()` — compares `district_id`.
+      - `require_scope_for_block_update()/delete()` — compares `subdivision_id`.
+  - Keep `admin_in_scope_for_geo()` and `admin_in_scope_for_block()` for places that check entities loaded in code.
+
+- __Routers Refactor__
+  - `backend/app/routers/admin_geo.py`
+    - States: create/update/delete require `require_superadmin`.
+    - District/Subdivision/Block create: use `require_geo_scope_for_action`.
+    - District/Subdivision/Block update/delete: use the new path-aware dependencies above.
+    - Deletions guardrails: cannot delete a District with existing Subdivisions; cannot delete a Subdivision with existing Blocks; non-superadmin deletions allowed only within 6 hours of creation.
+  - `backend/app/routers/jurisdiction_change_requests.py`
+    - Approve now uses `admin_in_scope_for_block()` helper (single-line scope check).
+
+- __Rate Limiting Default On (All Environments)__
+  - `backend/app/core/config.py`: `ENABLE_RATE_LIMIT_MIDDLEWARE` now defaults to `true` across environments.
+  - `backend/app/main.py`: Adds `RateLimitAndLogMiddleware` only when the flag is true. Disable by setting `ENABLE_RATE_LIMIT_MIDDLEWARE=false` for debugging.
+
+- __Profiles Public Endpoint Performance Refactor__
+  - `backend/app/routers/profiles.py`:
+    - Uses `selectinload` to eager-load `Patient.vaccinations` and `PatientVaccination.vaccine` for efficient summaries.
+    - Replaced broad `except Exception` with `except SQLAlchemyError` for DB operations (top diseases aggregation, health record fetch, vaccines summary).
+    - Maintains aggregate queries for total/last encounters and top diseases.
+
+- __Admin Invitations: Policy + UX__
+  - Policy (backend `backend/app/routers/invitations.py`):
+    - Superadmin can invite `state_admin` and may grant `full_control`.
+    - Admins with `full_control` may invite exactly one level down and may grant `full_control` to that next-level:
+      - `state_admin` -> `district_admin`
+      - `district_admin` -> `subdivision_admin`
+      - `subdivision_admin` -> `block_admin`
+    - Jurisdiction validation ensures invited scope aligns with inviter’s jurisdiction. Pydantic `schemas.InvitationCreate.full_control` allows true; enforcement remains server-side.
+  - Frontend (UX and gating):
+    - `frontend/src/pages/AdminInvitations.tsx` now includes required "Name" input and "Expires in (hours)" input.
+    - "Grant full control" checkbox is visible only to `superadmin` or admins with `full_control` and is sent in the payload accordingly.
+    - Cascading selectors (State/District/Subdivision/Block) appear as required by target role and are refreshed using `onRefreshGeo()` to avoid stale options.
+    - Route-level gating in `frontend/src/App.tsx` protects `/admin/invitations`; page-level safeguard also redirects non-eligible admins.
+    - The "My Invitations" table uses typed `revoked` and `full_control`; revoke button condition is `!inv.used && !inv.revoked`.
+  - `frontend/src/components/ui/Toast.tsx`:
+    - Lightweight, reusable toast with auto-dismiss and variants: success/error/info.
+
+- __Health Check Endpoint (CSRF-safe)__
+  - `backend/app/main.py`: `/check` is now GET-only to avoid CSRF 403s on POST due to `CsrfMiddleware` (unsafe methods require a matching `X-CSRF-Token` header and `csrf_token` cookie unless exempted).
+  - Probes should use `GET /check` or `GET /healthz`.
+
+- __Registration Flow: Transaction + Logging__
+  - `backend/app/auth.py` `register_user()`:
+    - Removed nested `with db.begin():` (caused `InvalidRequestError: A transaction is already begun on this Session`).
+    - Now performs a single `db.commit()` after creating `User` (and `Patient`/`MigrantProfile` for migrants).
+    - Added structured logging with `logger.exception("register_user failed")` for diagnosis of unexpected errors (still returns HTTP 500 with a generic message).
+
+- __Consent Requests: Auto-approval by Email (Migrant UI Simplified)__
+  - `backend/app/routers/consent_requests.py`:
+    - On provider/hospital create, system generates a unique consent code, sets status to `approved`, and emails the migrant immediately.
+    - Audit events added: `requested`, `approved`, `code_generated`, `code_email_sent` (or `code_email_failed`).
+  - `frontend/src/pages/Consents.tsx`:
+    - Migrant “Approve” button removed; migrants can still Reject/Revoke.
+    - Provider/Hospital flow remains unchanged: see status `approved` and enter code in “My Consent Requests” to get `granted`.
+
+- __Email Templates__
+  - Login OTP (backend `auth.py`): Subject "HealthLink Login OTP"; Body "Your HealthLink login otp is - <CODE>".
+  - Consent Code (backend `consent_requests.py`):
+    - Provider (doctor):
+      - Body: "Dr. <PROVIDER_NAME> is requesting your Consent\nYour Unique code is <CODE>\nnote - IF you share this code Dr. <PROVIDER_NAME> can read and modify your health record"
+    - Hospital:
+      - Body: "<HOSPITAL_NAME> is requesting your Consent\nYour Unique code is <CODE>\nnote - IF you share this code <HOSPITAL_NAME> hospital can read and modify your health record"
+
+- __Alembic Migration (idempotent)__
+  - `backend/alembic/versions/c9d8e7f6_add_fk_constraints.py` adds missing FKs if absent (PostgreSQL-safe DO $$ blocks):
+    - `admin_notes.author_id -> users.id (CASCADE)`
+    - `admin_notes.patient_id -> patients.id (CASCADE)`
+    - `attachments.encounter_id -> encounters.id (SET NULL)`
+    - `jurisdiction_change_requests.user_id -> users.id (CASCADE)`
+    - `jurisdiction_change_requests.requested_block_id -> blocks.id (RESTRICT)`
+  - Downgrade drops the above constraints only.
+
+- __i18n Conversions__
+  - Pages now use `useTranslation()` and translation keys for banner messages:
+    - `frontend/src/pages/AdminDiseases.tsx`
+    - `frontend/src/pages/AdminJurisdictionRequests.tsx`
+    - `frontend/src/pages/PatientDetail.tsx`
+  - Locales updated with keys:
+    - `frontend/public/locales/en/translation.json`
+    - `frontend/public/locales/ne/translation.json`
+    - `frontend/public/locales/bhb/translation.json`
+  - i18n config: `frontend/src/i18n.ts` loads locales from `/public/locales/<lng>/translation.json`.
+
+- __Catalogs Endpoint (Static Data moved server-side)__
+  - `backend/app/routers/catalogs.py`: `GET /catalogs/medical-councils` serves medical councils.
+  - Frontend client: `listMedicalCouncils()` in `frontend/src/api/client.ts`.
+  - `frontend/src/pages/Register.tsx` consumes councils dynamically (no more hardcoded list).
+
+- __Bulk Endpoints to avoid N+1__
+  - Backend:
+    - `POST /users/bulk` in `backend/app/routers/users.py` (return multiple users by IDs)
+    - `POST /geo/bulk-names` in `backend/app/routers/geo_public.py` (resolve multiple geo names)
+  - Frontend:
+    - `bulkGetUsers`, `bulkGeoNames` in `frontend/src/api/client.ts`
+    - `frontend/src/pages/AdminJurisdictionRequests.tsx` now batches user and geo lookups.
+
+- __UI Terminology Update: Provider → Doctor__
+  - All user-facing references to "Provider" are now displayed as "Doctor" across the UI.
+  - Example updates:
+    - `frontend/src/pages/Register.tsx`: role selector label shows "Doctor".
+    - `frontend/src/pages/Consents.tsx`: table headers and section headings use "Doctor".
+  - Note: Role keys remain `provider` in code and APIs for backward compatibility.
+
+- __Forgot Password: 24-hour Lockout After 5 Failed Attempts__
+  - Backend (`backend/app/auth.py`):
+    - On invalid OTP attempts during `POST /auth/password/reset`, we increment `OtpCode.attempts`. After 5 failed attempts, we create a `password_reset_lock` record (in `otp_codes`) that blocks further sends and resets for 24 hours.
+    - `POST /auth/password/forgot-send` checks for an active lock and returns 429 with a generic lockout message.
+  - Frontend (`frontend/src/pages/ForgotPassword.tsx`):
+    - Shows a clear message on 429: "You have made too many attempts. Please try again after 24 hours."
+
+- __Admin Dashboard: Quick Actions and New KPIs__
+  - Backend (`backend/app/routers/stats.py`):
+    - Added `last_7d.new_migrants` and a scope-aware `active_doctors` count based on current admin's jurisdiction.
+  - Frontend (`frontend/src/pages/AdminDashboard.tsx`, `frontend/src/types.ts`):
+    - Displays new KPIs: "New Migrants (7d)" and "Active Doctors (Scope)".
+    - Adds Quick Actions: "Invite New Admin", "Manage Admins", and "Manage Jurisdiction Requests" for a unified admin hub.
+
+- __Frontend Choropleth Heatmap + Theming (Leaflet + React-Leaflet)__
+  - Component: `frontend/src/components/HeatmapWidget.tsx`
+    - Choropleth from GeoJSON (state/district/subdivision), matched by feature name (NAME_1/NAME_2/NAME_3).
+    - Theme-aware (light/dark) map background, strokes, tooltips, and controls using CSS variables from `index.css`.
+    - Color ramps:
+      - Light: green → amber → red (static thresholds by default).
+      - Dark: blue/cyan ramp for higher contrast.
+    - Legend: Static or Quantile (20/40/60/80th percentiles computed from current data). Auto-falls back to Static if data sparse.
+    - Interaction:
+      - Hover: thicker outline in `--primary` color.
+      - Click: For Patients metric, click navigates to filtered Patients; Shift-click selects (persistent highlight + info card). For other metrics, click selects.
+      - Selection info panel includes Clear and (for Patients) Open patients.
+    - Policy: Disease-based (chronic condition) heatmap disabled; only Patients/Encounters/Attachments supported.
+  - Assets: place GeoJSON under `frontend/public/geo/` (served at `/geo/kerala_*.geojson`).
+  - Types: install `@types/leaflet` and `@types/geojson` in `frontend`. Remove any temporary `src/types/leaflet.d.ts` stubs.
+  - CSS: `frontend/src/index.css` includes semantic alert tokens and Leaflet control/tooltip theming.
+
+- __Admin Dashboard Quick Actions Gating__
+  - `frontend/src/pages/AdminDashboard.tsx` shows Quick Actions (Invite New Admin, Manage Admins, Manage Jurisdiction Requests) only for `superadmin` or admins with `full_control`. Directory links (Providers/Hospitals/Labs) remain visible to all admins.
+
 
 ## Endpoint Inventory (API surface)
 
@@ -339,6 +565,12 @@ All application routers are mounted under `/api/v1` in `backend/app/main.py`. He
   - GET `/api/v1/diseases/stats` — Aggregated stats (admin)
   - POST `/api/v1/diseases/seed` — Seed defaults (admin)
 
+- Vaccines (`backend/app/routers/vaccinations.py`)
+  - GET `/api/v1/vaccines/` — List all configured vaccines (provider/hospital/admin/migrant)
+  - POST `/api/v1/vaccines/` — Create vaccine (only `superadmin` or `state_admin`)
+  - GET `/api/v1/patients/{patient_id}/vaccinations` — List vaccination statuses for a patient (done vs pending)
+  - POST `/api/v1/patients/{patient_id}/vaccinations/mark-done` — Mark vaccine as done (provider/hospital; requires active consent)
+
 - Notifications (`backend/app/routers/notifications.py`)
   - GET `/api/v1/notifications/mine` — List current user's notifications
   - PATCH `/api/v1/notifications/{notification_id}/read` — Mark read
@@ -360,6 +592,10 @@ All application routers are mounted under `/api/v1` in `backend/app/main.py`. He
   - PATCH `/api/v1/jurisdiction-change-requests/{id}/approve|reject` — Admin actions
 
 - Stats (`backend/app/routers/stats.py`) [admin]
+
+- Chat (`backend/app/routers/chat.py`)
+  - POST `/api/v1/chat/ask` — Clinical RAG over recent attachments + Gemini answer
+  - GET `/api/v1/chat/health` — Preloads MedCAT/SBERT and reports status (ops)
   - GET `/api/v1/stats/kpis`
   - GET `/api/v1/stats/encounters_timeseries`
   - GET `/api/v1/stats/patients_timeseries`
@@ -376,7 +612,7 @@ All application routers are mounted under `/api/v1` in `backend/app/main.py`. He
 
 - `Patient`
   - Links to `migrant_user_id` (optional) and `created_by` (provider/hospital/admin)
-  - Has many `Encounter`, `Attachment`, `Medication`, `LabResult`
+  - Has many `Encounter`, `Attachment`, `Medication`, `LabResult`, `PatientVaccination`
 
 - `Encounter`
   - Belongs to `Patient`, created by `User`
@@ -408,6 +644,15 @@ All application routers are mounted under `/api/v1` in `backend/app/main.py`. He
 
 - `AdminNote`, `Notification`
   - Admin-only patient notes; user-targeted notifications (+ SSE stream)
+
+- `Vaccine`
+  - Fields: id, name (unique), created_at, created_by
+  - Rels: has many `PatientVaccination`
+
+- `PatientVaccination`
+  - Fields: id, patient_id, vaccine_id, status (`pending|done`), done_at, marked_by, created_at
+  - Unique: (`patient_id`, `vaccine_id`)
+  - Rels: belongs to `Patient` and `Vaccine`
 
 - GEO: `State`, `District`, `Subdivision`, `Block`
   - Hierarchical administrative geography for scoping admins and providers
@@ -448,7 +693,11 @@ All application routers are mounted under `/api/v1` in `backend/app/main.py`. He
   - HTTPS behind proxy: `TRUST_PROXY=true`
   - Auth: `ACCESS_TOKEN_EXPIRE_MINUTES` (15 in prod default)
   - OTP: `OTP_EXPIRE_MINUTES`, `OTP_CODE_LENGTH`, `OTP_MAX_ATTEMPTS`
-  - Storage: `S3_BUCKET`, `AWS_*`, `S3_ENDPOINT_URL`, `MAX_UPLOAD_SIZE_BYTES`, `ALLOWED_UPLOAD_CONTENT_TYPES`
+  - Storage: `S3_BUCKET`, `AWS_*`, `S3_ENDPOINT_URL`, `S3_ADDRESSING_STYLE` (auto|path|virtual), `MAX_UPLOAD_SIZE_BYTES`, `ALLOWED_UPLOAD_CONTENT_TYPES`
+
+  Tip:
+  - AWS S3 default works with `S3_ADDRESSING_STYLE=virtual` (or omit to auto-detect virtual when no custom endpoint is set).
+  - MinIO typically uses `S3_ENDPOINT_URL=http://localhost:9000` and `S3_ADDRESSING_STYLE=path` (auto mode will choose path when a custom endpoint is present).
 
 - Migrations:
   - Use Alembic under `backend/alembic/`. Typical commands:
