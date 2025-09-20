@@ -172,13 +172,14 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  Doctor -->|Request Report| System
-  System -->|Assign /(optional/)| LabNode[Lab]
-  LabNode -->|Accept/Claim| Worklist
-  LabNode -->|Upload Report| Storage
-  System -->|Mark Completed| Doctor
-  System -->|Notify| Migrant
-  LabNode -->|CSV Export| Local
+  Doctor -->|"Request Report"| System
+  System -->|"Assign Optional"| Lab
+  Lab -->|"Accept/Claim"| Worklist
+  Lab -->|"Upload Report"| Storage
+  System -->|"Mark Completed"| Doctor
+  System -->|"Notify"| Migrant
+  Lab -->|"CSV Export"| Local
+
 
 ```
 
