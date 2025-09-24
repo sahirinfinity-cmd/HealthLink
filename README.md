@@ -380,9 +380,9 @@ sequenceDiagram
 - Explanations, not medical advice (explicit disclaimer)
 
 
-# LLM Project Guide: Migrant Health Records
+# Project Guide: Migrant Health Records
 
-This document orients an LLM to the project structure, key files, responsibilities, and conventions so it can navigate, answer questions, and make safe changes. Paths are relative to the repository root.
+This document orients a Developer to the project structure, key files, responsibilities, and conventions so it can navigate, answer questions, and make safe changes. Paths are relative to the repository root.
 
 ## High-level Overview
 
