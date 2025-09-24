@@ -1,4 +1,4 @@
-# System Overview (Non‑Technical)
+# System Overview
 
 This document explains how real users interact with the Migrant Health Records platform. It focuses on roles, journeys, and outcomes — not implementation details. Diagrams are provided to visualize flows.
 
