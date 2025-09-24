@@ -652,7 +652,7 @@ Security controls for uploads:
 
 ---
 
-## How to Add a New Feature (LLM Playbook)
+## How to Add a New Feature (Developer Playbook)
 
 1. Identify the domain area:
    - Backend: add schema(s) in `schemas.py`, model(s) in `models.py`, and an API router in `routers/<feature>.py`
@@ -697,7 +697,7 @@ Security controls for uploads:
 
 ---
 
-## Notes for LLMs
+## Notes for Developers
 
 - Always read and respect `app/core/config.py` when adding features; config toggles are commonly used and gate production-only behaviors.
 - When modifying authentication flows, update both the backend endpoints (`auth.py`) and frontend integration (`AuthContext.tsx`, `services/http.ts`, and `api/client.ts`).
